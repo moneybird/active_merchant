@@ -80,7 +80,7 @@ module ActiveMerchant #:nodoc:
 
         def self.retrieve_methods(token)
           response = API.new(token).get_request("methods")
-          response['data'][0]
+          response['data']
         end
 
         def self.retrieve_issuers(token)

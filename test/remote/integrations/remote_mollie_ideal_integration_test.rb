@@ -13,7 +13,8 @@ class RemoteMollieIdealIntegrationTest < Test::Unit::TestCase
 
   def test_retrieve_methods
     methods = MollieIdeal.retrieve_methods(@api_key)
-    assert_kind_of Hash, methods
+    assert_kind_of Array, methods
+    assert_kind_of Hash, methods[0]
   end
 
   def test_retrieve_issuers
