@@ -11,6 +11,11 @@ class RemoteMollieIdealIntegrationTest < Test::Unit::TestCase
     assert_raises(ActiveMerchant::ResponseError) { MollieIdeal.retrieve_issuers('bad_api_key') }
   end
 
+  def test_retrieve_methods
+    methods = MollieIdeal.retrieve_methods(@api_key)
+    assert_kind_of Hash, methods
+  end
+
   def test_retrieve_issuers
     issuers = MollieIdeal.retrieve_issuers(@api_key)
     assert_equal [["TBM Bank", "ideal_TESTNL99"]], issuers

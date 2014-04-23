@@ -78,6 +78,11 @@ module ActiveMerchant #:nodoc:
           options[:credential1].start_with?('live_') ? live_issuers : test_issuers
         end
 
+        def self.retrieve_methods(token)
+          response = API.new(token).get_request("methods")
+          response['data'][0]
+        end
+
         def self.retrieve_issuers(token)
           response = API.new(token).get_request("issuers")
           response['data']
