@@ -15,7 +15,27 @@ module ActiveMerchant #:nodoc:
         :purchase       => 'cc:sale',
         :capture        => 'cc:capture',
         :refund         => 'cc:refund',
-        :void           => 'cc:void'
+        :void           => 'cc:void',
+        :void_release   => 'cc:void:release'
+      }
+
+      STANDARD_ERROR_CODE_MAPPING = {
+        '00011' => STANDARD_ERROR_CODE[:incorrect_number],
+        '00012' => STANDARD_ERROR_CODE[:incorrect_number],
+        '00013' => STANDARD_ERROR_CODE[:incorrect_number],
+        '00014' => STANDARD_ERROR_CODE[:invalid_number],
+        '00015' => STANDARD_ERROR_CODE[:invalid_expiry_date],
+        '00016' => STANDARD_ERROR_CODE[:invalid_expiry_date],
+        '00017' => STANDARD_ERROR_CODE[:expired_card],
+        '10116' => STANDARD_ERROR_CODE[:incorrect_cvc],
+        '10107' => STANDARD_ERROR_CODE[:incorrect_zip],
+        '10109' => STANDARD_ERROR_CODE[:incorrect_address],
+        '10110' => STANDARD_ERROR_CODE[:incorrect_address],
+        '10111' => STANDARD_ERROR_CODE[:incorrect_address],
+        '10127' => STANDARD_ERROR_CODE[:card_declined],
+        '10128' => STANDARD_ERROR_CODE[:processing_error],
+        '10132' => STANDARD_ERROR_CODE[:processing_error],
+        '00043' => STANDARD_ERROR_CODE[:call_issuer]
       }
 
       def initialize(options = {})
@@ -29,9 +49,12 @@ module ActiveMerchant #:nodoc:
         add_amount(post, money)
         add_invoice(post, options)
         add_credit_card(post, credit_card)
-        add_address(post, credit_card, options)
-        add_customer_data(post, options)
+        unless credit_card.track_data.present?
+          add_address(post, credit_card, options)
+          add_customer_data(post, options)
+        end
         add_split_payments(post, options)
+        add_test_mode(post, options)
 
         commit(:authorization, post)
       end
@@ -42,9 +65,12 @@ module ActiveMerchant #:nodoc:
         add_amount(post, money)
         add_invoice(post, options)
         add_credit_card(post, credit_card)
-        add_address(post, credit_card, options)
-        add_customer_data(post, options)
+        unless credit_card.track_data.present?
+          add_address(post, credit_card, options)
+          add_customer_data(post, options)
+        end
         add_split_payments(post, options)
+        add_test_mode(post, options)
 
         commit(:purchase, post)
       end
@@ -53,6 +79,7 @@ module ActiveMerchant #:nodoc:
         post = { :refNum => authorization }
 
         add_amount(post, money)
+        add_test_mode(post, options)
         commit(:capture, post)
       end
 
@@ -60,12 +87,23 @@ module ActiveMerchant #:nodoc:
         post = { :refNum => authorization }
 
         add_amount(post, money)
+        add_test_mode(post, options)
         commit(:refund, post)
       end
 
+      def verify(creditcard, options = {})
+        MultiResponse.run(:use_first_response) do |r|
+          r.process { authorize(1, creditcard, options) }
+          r.process(:ignore_result) { void(r.authorization, options) }
+        end
+      end
+
+      # Pass `no_release: true` to keep the void from immediately settling
       def void(authorization, options = {})
+        command = (options[:no_release] ? :void : :void_release)
         post = { :refNum => authorization }
-        commit(:void, post)
+        add_test_mode(post, options)
+        commit(command, post)
       end
 
     private
@@ -109,9 +147,10 @@ module ActiveMerchant #:nodoc:
 
       def add_address_for_type(type, post, credit_card, address)
         prefix = address_key_prefix(type)
+        first_name, last_name = split_names(address[:name])
 
-        post[address_key(prefix, 'fname')]    = credit_card.first_name
-        post[address_key(prefix, 'lname')]    = credit_card.last_name
+        post[address_key(prefix, 'fname')]    = first_name.blank? && last_name.blank? ? credit_card.first_name : first_name
+        post[address_key(prefix, 'lname')]    = first_name.blank? && last_name.blank? ? credit_card.last_name : last_name
         post[address_key(prefix, 'company')]  = address[:company]   unless address[:company].blank?
         post[address_key(prefix, 'street')]   = address[:address1]  unless address[:address1].blank?
         post[address_key(prefix, 'street2')]  = address[:address2]  unless address[:address2].blank?
@@ -139,10 +178,20 @@ module ActiveMerchant #:nodoc:
       end
 
       def add_credit_card(post, credit_card)
-        post[:card]   = credit_card.number
-        post[:cvv2]   = credit_card.verification_value if credit_card.verification_value?
-        post[:expir]  = expdate(credit_card)
-        post[:name]   = credit_card.name
+        if credit_card.track_data.present?
+          post[:magstripe] = credit_card.track_data
+          post[:cardpresent] = true
+        else
+          post[:card]   = credit_card.number
+          post[:cvv2]   = credit_card.verification_value if credit_card.verification_value?
+          post[:expir]  = expdate(credit_card)
+          post[:name]   = credit_card.name unless credit_card.name.blank?
+          post[:cardpresent] = true if credit_card.manual_entry
+        end
+      end
+
+      def add_test_mode(post, options)
+        post[:testmode] = (options[:test_mode] ? 1 : 0) if options.has_key?(:test_mode)
       end
 
       # see: http://wiki.usaepay.com/developer/transactionapi#split_payments
@@ -187,12 +236,12 @@ module ActiveMerchant #:nodoc:
       def commit(action, parameters)
         url = (test? ? self.test_url : self.live_url)
         response = parse(ssl_post(url, post_data(action, parameters)))
-
         Response.new(response[:status] == 'Approved', message_from(response), response,
           :test           => test?,
           :authorization  => response[:ref_num],
           :cvv_result     => response[:cvv2_result_code],
-          :avs_result     => { :code => response[:avs_result_code] }
+          :avs_result     => { :code => response[:avs_result_code] },
+          :error_code     => STANDARD_ERROR_CODE_MAPPING[response[:error_code]]
         )
       end
 
@@ -209,11 +258,13 @@ module ActiveMerchant #:nodoc:
         parameters[:command]  = TRANSACTIONS[action]
         parameters[:key]      = @options[:login]
         parameters[:software] = 'Active Merchant'
-        parameters[:testmode] = (@options[:test] ? 1 : 0)
+        parameters[:testmode] = (@options[:test] ? 1 : 0) unless parameters.has_key?(:testmode)
+        seed = SecureRandom.hex(32).upcase
+        hash = Digest::SHA1.hexdigest("#{parameters[:command]}:#{@options[:password]}:#{parameters[:amount]}:#{parameters[:invoice]}:#{seed}")
+        parameters[:hash] = "s/#{seed}/#{hash}/n"
 
         parameters.collect { |key, value| "UM#{key}=#{CGI.escape(value.to_s)}" }.join("&")
       end
     end
   end
 end
-

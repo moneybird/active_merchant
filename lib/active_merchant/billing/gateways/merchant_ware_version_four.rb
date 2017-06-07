@@ -2,7 +2,7 @@ module ActiveMerchant #:nodoc:
   module Billing #:nodoc:
     class MerchantWareVersionFourGateway < Gateway
       self.live_url = 'https://ps1.merchantware.net/Merchantware/ws/RetailTransaction/v4/Credit.asmx'
-      self.test_url = 'https://staging.merchantware.net/Merchantware/ws/RetailTransaction/v4/Credit.asmx'
+      self.test_url = 'https://ps1.merchantware.net/Merchantware/ws/RetailTransaction/v4/Credit.asmx'
 
       self.supported_countries = ['US']
       self.supported_cardtypes = [:visa, :master, :american_express, :discover]
@@ -20,7 +20,7 @@ module ActiveMerchant #:nodoc:
         :reference_purchase => 'RepeatSale',
         :authorize => "PreAuthorizationKeyed",
         :capture   => "PostAuthorization",
-        :void      => "VoidPreAuthorization",
+        :void      => "Void",
         :refund    => "Refund"
       }
 
@@ -108,6 +108,24 @@ module ActiveMerchant #:nodoc:
         commit(:refund, request)
       end
 
+      def verify(credit_card, options={})
+        MultiResponse.run(:use_first_response) do |r|
+          r.process { authorize(100, credit_card, options) }
+          r.process(:ignore_result) { void(r.authorization, options) }
+        end
+      end
+
+      def supports_scrubbing?
+        true
+      end
+
+      def scrub(transcript)
+        transcript.
+          gsub(%r((<merchantKey>).+?(</merchantKey>))i, '\1[FILTERED]\2').
+          gsub(%r((<cardNumber>).+?(</cardNumber>))i, '\1[FILTERED]\2').
+          gsub(%r((<cardSecurityCode>).+?(</cardSecurityCode>))i, '\1[FILTERED]\2')
+      end
+
       private
 
       def soap_request(action)
@@ -129,7 +147,7 @@ module ActiveMerchant #:nodoc:
       def build_purchase_request(action, money, payment_source, options)
         requires!(options, :order_id)
 
-        request = soap_request(action) do |xml|
+        soap_request(action) do |xml|
           add_invoice(xml, options)
           add_amount(xml, money)
           add_payment_source(xml, payment_source)
@@ -140,22 +158,15 @@ module ActiveMerchant #:nodoc:
       def build_capture_request(action, money, identification, options)
         reference, options[:order_id] = split_reference(identification)
 
-        request = soap_request(action) do |xml|
+        soap_request(action) do |xml|
           add_reference_token(xml, reference)
           add_invoice(xml, options)
           add_amount(xml, money)
         end
       end
 
-      def expdate(credit_card)
-        year  = sprintf("%.4i", credit_card.year)
-        month = sprintf("%.2i", credit_card.month)
-
-        "#{month}#{year[-2..-1]}"
-      end
-
       def add_invoice(xml, options)
-        xml.tag! "invoiceNumber", options[:order_id].to_s.gsub(/[^\w]/, '').slice(0, 25)
+        xml.tag! "invoiceNumber", truncate(options[:order_id].to_s.gsub(/[^\w]/, ''), 8)
       end
 
       def add_amount(xml, money, tag = "amount")
@@ -234,7 +245,7 @@ module ActiveMerchant #:nodoc:
 
         response[:message] = response["ErrorMessage"].to_s.gsub("\n", " ")
         response
-      rescue REXML::ParseException => e
+      rescue REXML::ParseException
         response[:http_body]        = http_response.body
         response[:message]          = "Failed to parse the failed response"
         response

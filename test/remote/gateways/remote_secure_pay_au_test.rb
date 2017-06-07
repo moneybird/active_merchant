@@ -4,7 +4,6 @@ class RemoteSecurePayAuTest < Test::Unit::TestCase
 
   class MyCreditCard
     include ActiveMerchant::Billing::CreditCardMethods
-    include ActiveMerchant::Validateable
     attr_accessor :number, :month, :year, :first_name, :last_name, :verification_value, :brand
 
     def verification_value?
@@ -183,5 +182,16 @@ class RemoteSecurePayAuTest < Test::Unit::TestCase
     assert response = gateway.purchase(@amount, @credit_card, @options)
     assert_failure response
     assert_equal "Invalid merchant ID", response.message
+  end
+
+  def test_purchase_scrubbing
+    transcript = capture_transcript(@gateway) do
+      @gateway.purchase(@amount, @credit_card, @options)
+    end
+    transcript = @gateway.scrub(transcript)
+
+    assert_scrubbed(credit_card.number, transcript)
+    assert_scrubbed(@gateway.options[:login], transcript)
+    assert_scrubbed(@gateway.options[:password], transcript)
   end
 end

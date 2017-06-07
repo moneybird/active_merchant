@@ -17,15 +17,31 @@ class GatewayTest < Test::Unit::TestCase
     assert_false [:visa, :bogus].all? { |invalid_cardtype| Gateway.supports?(invalid_cardtype) }
   end
 
+  def test_should_validate_supported_countries
+    assert_raise(ActiveMerchant::InvalidCountryCodeError) do
+      Gateway.supported_countries = %w(us uk sg)
+    end
+
+    all_country_codes = ActiveMerchant::Country::COUNTRIES.collect do |country|
+      [country[:alpha2], country[:alpha3]]
+    end.flatten
+
+    assert_nothing_raised do
+      Gateway.supported_countries = all_country_codes
+      assert Gateway.supported_countries == all_country_codes,
+        "List of supported countries not properly set"
+    end
+  end
+
   def test_should_gateway_uses_ssl_strict_checking_by_default
     assert Gateway.ssl_strict
   end
 
   def test_should_be_able_to_look_for_test_mode
-    Base.gateway_mode = :test
+    Base.mode = :test
     assert @gateway.test?
 
-    Base.gateway_mode = :production
+    Base.mode = :production
     assert_false @gateway.test?
   end
 
@@ -72,5 +88,48 @@ class GatewayTest < Test::Unit::TestCase
     Gateway.money_format = :cents
     assert_equal '1', @gateway.send(:localized_amount, 100, 'JPY')
     assert_equal '12', @gateway.send(:localized_amount, 1234, 'HUF')
+  end
+
+  def test_split_names
+    assert_equal ["Longbob", "Longsen"], @gateway.send(:split_names, "Longbob Longsen")
+  end
+
+  def test_split_names_with_single_name
+    assert_equal ["", "Prince"], @gateway.send(:split_names, "Prince")
+  end
+
+  def test_split_names_with_empty_names
+    assert_equal [nil, nil], @gateway.send(:split_names, "")
+    assert_equal [nil, nil], @gateway.send(:split_names, nil)
+    assert_equal [nil, nil], @gateway.send(:split_names, " ")
+  end
+
+
+  def test_supports_scrubbing?
+    gateway = Gateway.new
+    refute gateway.supports_scrubbing?
+  end
+
+  def test_should_not_allow_scrubbing_if_unsupported
+    gateway = Gateway.new
+    refute gateway.supports_scrubbing?
+
+    assert_raise(RuntimeError) do
+      gateway.scrub("hi")
+    end
+  end
+
+  def test_strip_invalid_xml_chars
+    xml = <<EOF
+      <response>
+        <element>Parse the First & but not this &tilde; &x002a;</element>
+      </response>
+EOF
+    parsed_xml = @gateway.send(:strip_invalid_xml_chars, xml)
+
+    assert REXML::Document.new(parsed_xml)
+    assert_raise(REXML::ParseException) do
+      REXML::Document.new(xml)
+    end
   end
 end

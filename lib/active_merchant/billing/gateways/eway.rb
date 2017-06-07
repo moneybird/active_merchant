@@ -8,7 +8,7 @@ module ActiveMerchant #:nodoc:
       self.live_url = 'https://www.eway.com.au'
 
       self.money_format = :cents
-      self.supported_countries = ['AU', 'NZ', 'GB']
+      self.supported_countries = ['AU']
       self.supported_cardtypes = [:visa, :master, :american_express, :diners_club]
       self.homepage_url = 'http://www.eway.com.au/'
       self.display_name = 'eWAY'
@@ -50,6 +50,17 @@ module ActiveMerchant #:nodoc:
         post[:CardExpiryYear] = nil
 
         commit(refund_url, money, post)
+      end
+
+      def supports_scrubbing
+        true
+      end
+
+      def scrub(transcript)
+        transcript.
+          gsub(%r((Authorization: Basic )\w+), '\1[FILTERED]').
+          gsub(%r((<ewayCardNumber>)\d+(</ewayCardNumber>))i, '\1[FILTERED]\2').
+          gsub(%r((<ewayCVN>)\d+(</ewayCVN>))i, '\1[FILTERED]\2')
       end
 
       private
@@ -134,17 +145,6 @@ module ActiveMerchant #:nodoc:
       def message_from(message)
         return '' if message.blank?
         MESSAGES[message[0,2]] || message
-      end
-
-      # Make a ruby type out of the response string
-      def normalize(field)
-        case field
-        when "true"   then true
-        when "false"  then false
-        when ""       then nil
-        when "null"   then nil
-        else field
-        end
       end
 
       def purchase_url(cvn)

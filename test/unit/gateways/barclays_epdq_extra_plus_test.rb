@@ -9,6 +9,7 @@ class BarclaysEpdqExtraPlusTest < Test::Unit::TestCase
                      :signature_encryptor => 'sha512' }
     @gateway = BarclaysEpdqExtraPlusGateway.new(@credentials)
     @credit_card = credit_card
+    @mastercard  = credit_card('5399999999999999', :brand => "mastercard")
     @amount = 100
     @identification = "3014726"
     @billing_id = "myalias"
@@ -92,10 +93,21 @@ class BarclaysEpdqExtraPlusTest < Test::Unit::TestCase
   def test_successful_authorize
     @gateway.expects(:add_pair).at_least(1)
     @gateway.expects(:add_pair).with(anything, 'ECI', '7')
+    @gateway.expects(:add_pair).with(anything, 'Operation', 'RES')
     @gateway.expects(:ssl_post).returns(successful_purchase_response)
     assert response = @gateway.authorize(@amount, @credit_card, @options)
     assert_success response
     assert_equal '3014726;RES', response.authorization
+    assert response.test?
+  end
+
+  def test_successful_authorize_with_mastercard
+    @gateway.expects(:add_pair).at_least(1)
+    @gateway.expects(:add_pair).with(anything, 'Operation', 'PAU')
+    @gateway.expects(:ssl_post).returns(successful_purchase_response)
+    assert response = @gateway.authorize(@amount, @mastercard, @options)
+    assert_success response
+    assert_equal '3014726;PAU', response.authorization
     assert response.test?
   end
 
@@ -145,7 +157,7 @@ class BarclaysEpdqExtraPlusTest < Test::Unit::TestCase
 
   def test_deprecated_credit
     @gateway.expects(:ssl_post).returns(successful_referenced_credit_response)
-    assert_deprecation_warning(Gateway::CREDIT_DEPRECATION_MESSAGE, @gateway) do
+    assert_deprecation_warning(Gateway::CREDIT_DEPRECATION_MESSAGE) do
       assert response = @gateway.credit(@amount, "3049652;SAL")
       assert_success response
       assert_equal '3049652;RFD', response.authorization
@@ -184,7 +196,7 @@ class BarclaysEpdqExtraPlusTest < Test::Unit::TestCase
     @gateway.expects(:add_pair).at_least(1)
     @gateway.expects(:add_pair).with(anything, 'ECI', '7')
     @gateway.expects(:ssl_post).times(2).returns(successful_purchase_response)
-    assert_deprecation_warning(BarclaysEpdqExtraPlusGateway::OGONE_STORE_OPTION_DEPRECATION_MESSAGE, @gateway) do
+    assert_deprecation_warning(BarclaysEpdqExtraPlusGateway::OGONE_STORE_OPTION_DEPRECATION_MESSAGE) do
       assert response = @gateway.store(@credit_card, :store => @billing_id)
       assert_success response
       assert_equal '3014726;RES', response.authorization
@@ -300,13 +312,13 @@ class BarclaysEpdqExtraPlusTest < Test::Unit::TestCase
   def test_without_signature
     gateway = BarclaysEpdqExtraPlusGateway.new(@credentials.merge(:signature => nil, :signature_encryptor => nil))
     gateway.expects(:ssl_post).returns(successful_purchase_response)
-    assert_deprecation_warning(BarclaysEpdqExtraPlusGateway::OGONE_NO_SIGNATURE_DEPRECATION_MESSAGE, gateway) do
+    assert_deprecation_warning(BarclaysEpdqExtraPlusGateway::OGONE_NO_SIGNATURE_DEPRECATION_MESSAGE) do
       gateway.purchase(@amount, @credit_card, @options)
     end
 
     gateway = BarclaysEpdqExtraPlusGateway.new(@credentials.merge(:signature => nil, :signature_encryptor => "none"))
     gateway.expects(:ssl_post).returns(successful_purchase_response)
-    assert_no_deprecation_warning(@gateway) do
+    assert_no_deprecation_warning do
       gateway.purchase(@amount, @credit_card, @options)
     end
   end
@@ -393,6 +405,10 @@ class BarclaysEpdqExtraPlusTest < Test::Unit::TestCase
     @gateway.expects(:ssl_post).returns(successful_purchase_response)
     assert response = @gateway.purchase(@amount, @credit_card, @options)
     assert_instance_of Hash, response.params
+  end
+
+  def test_transcript_scrubbing
+    assert_equal scrubbed_transcript, @gateway.scrub(transcript)
   end
 
   private
@@ -677,5 +693,43 @@ class BarclaysEpdqExtraPlusTest < Test::Unit::TestCase
     ALIAS="2">
     </ncresponse>
     END
+  end
+
+  def transcript
+    <<-TRANSCRIPT
+    CARDNO=4000100011112224&CN=Longbob+Longsen&COM=Store+Purchase&CVC=123&ECI=7&ED=0914&Operation=SAL&OwnerZip=K1C2N6&Owneraddress=1234+My+Street&PSPID=epdq1004895&PSWD=test&SHASign=0798F0F333C1867CC2B22D77E6452F8CAEFE9888&USERID=spreedly&amount=100&currency=GBP&orderID=b15d2f92e3ddee1a14b1b4b92cae9c&ownercty=CA&ownertelno=%28555%29555-5555&ownertown=Ottawa
+    <?xml version="1.0"?><ncresponse
+    orderID="b15d2f92e3ddee1a14b1b4b92cae9c"
+    PAYID="22489229"
+    NCSTATUS="0"
+    NCERROR="0"
+    ACCEPTANCE="test123"
+    STATUS="9"
+    amount="1"
+    currency="GBP"
+    PM="CreditCard"
+    BRAND="VISA"
+    NCERRORPLUS="!">
+    </ncresponse>
+    TRANSCRIPT
+  end
+
+  def scrubbed_transcript
+    <<-SCRUBBED_TRANSCRIPT
+    CARDNO=[FILTERED]&CN=Longbob+Longsen&COM=Store+Purchase&CVC=[FILTERED]&ECI=7&ED=0914&Operation=SAL&OwnerZip=K1C2N6&Owneraddress=1234+My+Street&PSPID=epdq1004895&PSWD=[FILTERED]&SHASign=0798F0F333C1867CC2B22D77E6452F8CAEFE9888&USERID=spreedly&amount=100&currency=GBP&orderID=b15d2f92e3ddee1a14b1b4b92cae9c&ownercty=CA&ownertelno=%28555%29555-5555&ownertown=Ottawa
+    <?xml version="1.0"?><ncresponse
+    orderID="b15d2f92e3ddee1a14b1b4b92cae9c"
+    PAYID="22489229"
+    NCSTATUS="0"
+    NCERROR="0"
+    ACCEPTANCE="test123"
+    STATUS="9"
+    amount="1"
+    currency="GBP"
+    PM="CreditCard"
+    BRAND="VISA"
+    NCERRORPLUS="!">
+    </ncresponse>
+    SCRUBBED_TRANSCRIPT
   end
 end

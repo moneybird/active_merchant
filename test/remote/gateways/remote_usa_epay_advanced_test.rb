@@ -10,7 +10,7 @@ class RemoteUsaEpayAdvancedTest < Test::Unit::TestCase
     @credit_card = ActiveMerchant::Billing::CreditCard.new(
       :number => '4000100011112224',
       :month => 9,
-      :year => 14,
+      :year => Time.now.year + 1,
       :brand => 'visa',
       :verification_value => '123',
       :first_name => "Fred",
@@ -135,7 +135,7 @@ class RemoteUsaEpayAdvancedTest < Test::Unit::TestCase
   def test_credit
     assert purchase = @gateway.purchase(@amount, @credit_card, @options.dup)
 
-    assert_deprecation_warning(Gateway::CREDIT_DEPRECATION_MESSAGE, @gateway) do
+    assert_deprecation_warning(Gateway::CREDIT_DEPRECATION_MESSAGE) do
       assert credit = @gateway.credit(@amount, purchase.authorization, @options)
       assert_equal 'A', credit.params['refund_transaction_return']['result_code']
     end
@@ -173,6 +173,14 @@ class RemoteUsaEpayAdvancedTest < Test::Unit::TestCase
     @options.merge!(@update_customer_options.merge!(:customer_number => customer_number))
     response = @gateway.update_customer(@options)
     assert response.params['update_customer_return']
+  end
+
+  def test_quick_update_customer
+    response = @gateway.add_customer(@options.merge(@customer_options))
+    customer_number = response.params['add_customer_return']
+
+    response = @gateway.quick_update_customer({customer_number: customer_number, update_data: @update_customer_options})
+    assert response.params['quick_update_customer_return']
   end
 
   def test_enable_disable_customer
@@ -422,7 +430,7 @@ class RemoteUsaEpayAdvancedTest < Test::Unit::TestCase
     response = @gateway.get_transaction_custom(:reference_number => reference_number,
                                                :fields => ['Response.StatusCode', 'Response.Status'])
     assert response.params['get_transaction_custom_return']
-    response = @gateway.get_transaction_custom(:reference_number => reference_number, 
+    response = @gateway.get_transaction_custom(:reference_number => reference_number,
                                                :fields => ['Response.StatusCode'])
     assert response.params['get_transaction_custom_return']
   end

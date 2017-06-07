@@ -43,7 +43,7 @@ module ActiveMerchant #:nodoc:
         'USUAL_DATE' => :undoc_usual_date, # Not found in the bp20rebadmin API doc.
       }
 
-      self.supported_countries = ['US']
+      self.supported_countries = ['US', 'CA']
       self.supported_cardtypes = [:visa, :master, :american_express, :discover, :diners_club, :jcb]
       self.homepage_url        = 'http://www.bluepay.com/'
       self.display_name        = 'BluePay'
@@ -155,7 +155,7 @@ module ActiveMerchant #:nodoc:
       # * <tt>options</tt> -- A hash of parameters.
       def refund(money, identification, options = {})
         if(identification && !identification.kind_of?(String))
-          deprecated "refund should only be used to refund a referenced transaction"
+          ActiveMerchant.deprecated "refund should only be used to refund a referenced transaction"
           return credit(money, identification, options)
         end
 
@@ -174,7 +174,7 @@ module ActiveMerchant #:nodoc:
 
       def credit(money, payment_object, options = {})
         if(payment_object && payment_object.kind_of?(String))
-          deprecated "credit should only be used to credit a payment method"
+          ActiveMerchant.deprecated "credit should only be used to credit a payment method"
           return refund(money, payment_object, options)
         end
 
@@ -224,6 +224,8 @@ module ActiveMerchant #:nodoc:
       #   :rebill_amount     => '39.95'
       #   A money object of 1995 cents would be passed into the 'money' parameter.
       def recurring(money, payment_object, options = {})
+        ActiveMerchant.deprecated RECURRING_DEPRECATION_MESSAGE
+
         requires!(options, :rebill_start_date, :rebill_expression)
         options[:rebill] = true
         if money
@@ -241,6 +243,8 @@ module ActiveMerchant #:nodoc:
       #
       # * <tt>rebill_id</tt> -- A string containing the rebill_id of the recurring billing that is already active (REQUIRED)
       def status_recurring(rebill_id)
+        ActiveMerchant.deprecated RECURRING_DEPRECATION_MESSAGE
+
         post = {}
         requires!(rebill_id)
         post[:REBILL_ID] = rebill_id
@@ -262,6 +266,8 @@ module ActiveMerchant #:nodoc:
       # * <tt>:rebill_next_amount</tt> -- A string containing the next rebilling amount to charge the customer. This ONLY affects the next scheduled charge; all other rebillings will continue at the regular (rebill_amount) amount.
       #   Take a look above at the recurring_payment method for similar examples on how to use.
       def update_recurring(options = {})
+        ActiveMerchant.deprecated RECURRING_DEPRECATION_MESSAGE
+
         post = {}
         requires!(options, :rebill_id)
         post[:REBILL_ID]          = options[:rebill_id]
@@ -282,12 +288,27 @@ module ActiveMerchant #:nodoc:
       #
       # * <tt>rebill_id</tt> -- A string containing the rebill_id of the recurring billing that you wish to cancel/stop (REQUIRED)
       def cancel_recurring(rebill_id)
+        ActiveMerchant.deprecated RECURRING_DEPRECATION_MESSAGE
+
         post = {}
         requires!(rebill_id)
         post[:REBILL_ID]         = rebill_id
         post[:TRANS_TYPE]        = 'SET'
         post[:STATUS]            = 'stopped'
         commit('rebill', 'nil', post)
+      end
+
+      def supports_scrubbing
+        true
+      end
+
+      def scrub(transcript)
+        transcript.
+          gsub(%r((Authorization: Basic )\w+), '\1[FILTERED]').
+          gsub(%r((&?card_num=)[^&]*)i, '\1[FILTERED]').
+          gsub(%r((&?CARD_CVV2=)[^&]*)i, '\1[FILTERED]').
+          gsub(%r((&?PAYMENT_ACCOUNT=)[^&]*)i, '\1[FILTERED]').
+          gsub(%r((&?TAMPER_PROOF_SEAL=)[^&"]*)i, '\1[FILTERED]')
       end
 
       private
@@ -357,7 +378,7 @@ module ActiveMerchant #:nodoc:
           else
             message = message.chomp('.')
           end
-        elsif message == "Missing ACCOUNT_ID" 
+        elsif message == "Missing ACCOUNT_ID"
           message = "The merchant login ID or password is invalid"
         elsif message =~ /Approved/
           message = "This transaction has been approved"
@@ -409,8 +430,9 @@ module ActiveMerchant #:nodoc:
       end
 
       def add_customer_data(post, options)
-          post[:EMAIL]     = options[:email]
-          post[:CUSTOM_ID] = options[:customer]
+        post[:EMAIL]     = options[:email]
+        post[:CUSTOM_ID] = options[:customer]
+        post[:CUSTOM_ID2] = options[:custom_id2]
       end
 
       def add_duplicate_override(post, options)
@@ -450,7 +472,7 @@ module ActiveMerchant #:nodoc:
         post[:encap_char]     = "$"
         post[:card_num]       = '4111111111111111'
         post[:exp_date]       = '1212'
-        post[:solution_ID]    = application_id if(application_id && application_id != "ActiveMerchant")
+        post[:solution_ID]    = application_id if application_id
         post.merge(parameters).collect { |key, value| "#{key}=#{CGI.escape(value.to_s)}" }.join("&")
       end
 

@@ -57,8 +57,7 @@ module ActiveMerchant #:nodoc:
 
         post[:company] = address[:company]
 
-        # groups all names after the first into the last name param
-        post[:first_name], post[:last_name] = address[:name].split(' ', 2)
+        post[:first_name], post[:last_name] = split_names(address[:name])
         post[:address] = "#{address[:address1]}, #{address[:address2]}"
         post[:city] = address[:city]
         post[:country] = address[:country]
@@ -119,7 +118,6 @@ module ActiveMerchant #:nodoc:
               build_error_response(message, response)
             end
           rescue ResponseError => e
-            raw_response = e.response.body
             build_error_response("ssl_post() with url #{url} raised ResponseError: #{e}")
           rescue JSON::ParserError => e
             msg = 'Invalid response received from the Swipe Checkout API. ' +

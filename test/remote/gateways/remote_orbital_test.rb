@@ -3,10 +3,10 @@ require "test_helper.rb"
 class RemoteOrbitalGatewayTest < Test::Unit::TestCase
   def setup
     Base.mode = :test
-    @gateway = ActiveMerchant::Billing::OrbitalGateway.new(fixtures(:orbital))
+    @gateway = ActiveMerchant::Billing::OrbitalGateway.new(fixtures(:orbital_gateway))
 
     @amount = 100
-    @credit_card = credit_card('4111111111111111')
+    @credit_card = credit_card('4112344112344113')
     @declined_card = credit_card('4000300011112220')
 
     @options = {
@@ -40,11 +40,25 @@ class RemoteOrbitalGatewayTest < Test::Unit::TestCase
     assert_equal 'Approved', response.message
   end
 
+  def test_successful_purchase_with_soft_descriptor_hash
+    assert response = @gateway.purchase(
+      @amount, @credit_card, @options.merge(
+        soft_descriptors: {
+          merchant_name: 'Merch',
+          product_description: 'Description',
+          merchant_email: 'email@example',
+        }
+      )
+    )
+    assert_success response
+    assert_equal 'Approved', response.message
+  end
+
   # Amounts of x.01 will fail
   def test_unsuccessful_purchase
     assert response = @gateway.purchase(101, @declined_card, @options)
     assert_failure response
-    assert_equal 'AUTH DECLINED                   12001', response.message
+    assert_equal 'Invalid CC Number', response.message
   end
 
   def test_authorize_and_capture
@@ -79,15 +93,6 @@ class RemoteOrbitalGatewayTest < Test::Unit::TestCase
     assert response = @gateway.capture(@amount, '')
     assert_failure response
     assert_equal 'Bad data error', response.message
-  end
-
-  def test_successful_purchase_with_money
-    response = nil
-    silence_warnings do
-      assert response = @gateway.purchase(Money.new(100), @credit_card, @options)
-    end
-    assert_success response
-    assert_equal 'Approved', response.message
   end
 
   # == Certification Tests
@@ -171,5 +176,28 @@ class RemoteOrbitalGatewayTest < Test::Unit::TestCase
       # puts "TxRefNum => " + void_response.params["tx_ref_num"]
       # puts
     end
+  end
+
+  def test_successful_verify
+    response = @gateway.verify(@credit_card, @options)
+    assert_success response
+    assert_equal 'Approved', response.message
+  end
+
+  def test_failed_verify
+    response = @gateway.verify(@declined_card, @options)
+    assert_failure response
+    assert_equal 'Invalid CC Number', response.message
+  end
+
+  def test_transcript_scrubbing
+    transcript = capture_transcript(@gateway) do
+      @gateway.purchase(@amount, @credit_card, @options)
+    end
+    transcript = @gateway.scrub(transcript)
+
+    assert_scrubbed(@credit_card.number, transcript)
+    assert_scrubbed(@credit_card.verification_value, transcript)
+    assert_scrubbed(@gateway.options[:password], transcript)
   end
 end

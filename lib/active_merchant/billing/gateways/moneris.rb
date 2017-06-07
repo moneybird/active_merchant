@@ -33,6 +33,7 @@ module ActiveMerchant #:nodoc:
       def initialize(options = {})
         requires!(options, :login, :password)
         @cvv_enabled = options[:cvv_enabled]
+        @avs_enabled = options[:avs_enabled]
         options = { :crypt_type => 7 }.merge(options)
         super
       end
@@ -45,12 +46,18 @@ module ActiveMerchant #:nodoc:
       def authorize(money, creditcard_or_datakey, options = {})
         requires!(options, :order_id)
         post = {}
-        add_payment_source(post, creditcard_or_datakey)
+        add_payment_source(post, creditcard_or_datakey, options)
         post[:amount]     = amount(money)
         post[:order_id]   = options[:order_id]
-        post[:cust_id]    = options[:customer]
+        post[:address]    = options[:billing_address] || options[:address]
         post[:crypt_type] = options[:crypt_type] || @options[:crypt_type]
-        action = (post[:data_key].blank?) ? 'preauth' : 'res_preauth_cc'
+        action = if post[:cavv]
+          'cavv_preauth'
+        elsif post[:data_key].blank?
+          'preauth'
+        else
+          'res_preauth_cc'
+        end
         commit(action, post)
       end
 
@@ -61,12 +68,18 @@ module ActiveMerchant #:nodoc:
       def purchase(money, creditcard_or_datakey, options = {})
         requires!(options, :order_id)
         post = {}
-        add_payment_source(post, creditcard_or_datakey)
+        add_payment_source(post, creditcard_or_datakey, options)
         post[:amount]     = amount(money)
         post[:order_id]   = options[:order_id]
-        post[:cust_id]    = options[:customer]
+        post[:address]    = options[:billing_address] || options[:address]
         post[:crypt_type] = options[:crypt_type] || @options[:crypt_type]
-        action = (post[:data_key].blank?) ? 'purchase' : 'res_purchase_cc'
+        action = if post[:cavv]
+          'cavv_purchase'
+        elsif post[:data_key].blank?
+          'purchase'
+        else
+          'res_purchase_cc'
+        end
         commit(action, post)
       end
 
@@ -111,12 +124,19 @@ module ActiveMerchant #:nodoc:
       # Moneris interface consistent with other gateways. (See +capture+ for
       # details.)
       def credit(money, authorization, options = {})
-        deprecated CREDIT_DEPRECATION_MESSAGE
+        ActiveMerchant.deprecated CREDIT_DEPRECATION_MESSAGE
         refund(money, authorization, options)
       end
 
       def refund(money, authorization, options = {})
         commit 'refund', crediting_params(authorization, :amount => amount(money))
+      end
+
+      def verify(credit_card, options={})
+        MultiResponse.run(:use_first_response) do |r|
+          r.process { authorize(100, credit_card, options) }
+          r.process(:ignore_result) { void(r.authorization, options) }
+        end
       end
 
       def store(credit_card, options = {})
@@ -142,19 +162,40 @@ module ActiveMerchant #:nodoc:
         commit('res_update_cc', post)
       end
 
+      def supports_scrubbing?
+        true
+      end
+
+      def scrub(transcript)
+        transcript.
+          gsub(%r((<store_id>).+(</store_id>)), '\1[FILTERED]\2').
+          gsub(%r((<api_token>).+(</api_token>)), '\1[FILTERED]\2').
+          gsub(%r((<pan>).+(</pan>)), '\1[FILTERED]\2').
+          gsub(%r((<cvd_value>).+(</cvd_value>)), '\1[FILTERED]\2').
+          gsub(%r((<cavv>).+(</cavv>)), '\1[FILTERED]\2')
+      end
+
       private # :nodoc: all
 
       def expdate(creditcard)
         sprintf("%.4i", creditcard.year)[-2..-1] + sprintf("%.2i", creditcard.month)
       end
 
-      def add_payment_source(post, source)
+      def add_payment_source(post, source, options)
         if source.is_a?(String)
           post[:data_key]   = source
+          post[:cust_id]    = options[:customer]
         else
-          post[:pan]        = source.number
-          post[:expdate]    = expdate(source)
-          post[:cvd_value]  = source.verification_value if source.verification_value?
+          if source.respond_to?(:track_data) && source.track_data.present?
+            post[:pos_code]   = '00'
+            post[:track2]     = source.track_data
+          else
+            post[:pan]        = source.number
+            post[:expdate]    = expdate(source)
+            post[:cvd_value]  = source.verification_value if source.verification_value?
+            post[:cavv] = source.payment_cryptogram if source.is_a?(NetworkTokenizationCreditCard)
+          end
+          post[:cust_id] = options[:customer] || source.name
         end
       end
 
@@ -185,7 +226,8 @@ module ActiveMerchant #:nodoc:
 
         Response.new(successful?(response), message_from(response[:message]), response,
           :test          => test?,
-          :cvv_result    => response[:cvd_result_code].try(:last),
+          :avs_result    => { :code => response[:avs_result_code] },
+          :cvv_result    => response[:cvd_result_code] && response[:cvd_result_code][-1,1],
           :authorization => authorization_from(response)
         )
       end
@@ -233,14 +275,28 @@ module ActiveMerchant #:nodoc:
 
         # Must add the elements in the correct order
         actions[action].each do |key|
-          if((key == :cvd_info) && @cvv_enabled)
-            transaction.add_element(cvd_element(parameters[:cvd_value]))
+          case key
+          when :avs_info
+            transaction.add_element(avs_element(parameters[:address])) if @avs_enabled && parameters[:address]
+          when :cvd_info
+            transaction.add_element(cvd_element(parameters[:cvd_value])) if @cvv_enabled
           else
             transaction.add_element(key.to_s).text = parameters[key] unless parameters[key].blank?
           end
         end
 
         transaction
+      end
+
+      def avs_element(address)
+        full_address = "#{address[:address1]} #{address[:address2]}"
+        tokens = full_address.split(/\s+/)
+
+        element = REXML::Element.new('avs_info')
+        element.add_element('avs_street_number').text = tokens.select{|x| x =~ /\d/}.join(' ')
+        element.add_element('avs_street_name').text = tokens.reject{|x| x =~ /\d/}.join(' ')
+        element.add_element('avs_zipcode').text = address[:zip]
+        element
       end
 
       def cvd_element(cvd_value)
@@ -259,27 +315,17 @@ module ActiveMerchant #:nodoc:
         message.gsub(/[^\w]/, ' ').split.join(" ").capitalize
       end
 
-      # Make a Ruby type out of the response string
-      def normalize(field)
-        case field
-          when "true"     then true
-          when "false"    then false
-          when '', "null" then nil
-          else field
-        end
-      end
-
       def actions
         {
-          "purchase"           => [:order_id, :cust_id, :amount, :pan, :expdate, :crypt_type, :cvd_info],
-          "preauth"            => [:order_id, :cust_id, :amount, :pan, :expdate, :crypt_type, :cvd_info],
+          "purchase"           => [:order_id, :cust_id, :amount, :pan, :expdate, :crypt_type, :avs_info, :cvd_info, :track2, :pos_code],
+          "preauth"            => [:order_id, :cust_id, :amount, :pan, :expdate, :crypt_type, :avs_info, :cvd_info, :track2, :pos_code],
           "command"            => [:order_id],
           "refund"             => [:order_id, :amount, :txn_number, :crypt_type],
           "indrefund"          => [:order_id, :cust_id, :amount, :pan, :expdate, :crypt_type],
           "completion"         => [:order_id, :comp_amount, :txn_number, :crypt_type],
           "purchasecorrection" => [:order_id, :txn_number, :crypt_type],
-          "cavvpurcha"         => [:order_id, :cust_id, :amount, :pan, :expdate, :cav],
-          "cavvpreaut"         => [:order_id, :cust_id, :amount, :pan, :expdate, :cavv],
+          "cavv_preauth"       => [:order_id, :cust_id, :amount, :pan, :expdate, :cavv],
+          "cavv_purchase"      => [:order_id, :cust_id, :amount, :pan, :expdate, :cavv],
           "transact"           => [:order_id, :cust_id, :amount, :pan, :expdate, :crypt_type],
           "Batchcloseall"      => [],
           "opentotals"         => [:ecr_number],

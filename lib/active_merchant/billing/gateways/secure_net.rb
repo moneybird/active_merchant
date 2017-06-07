@@ -57,7 +57,7 @@ module ActiveMerchant #:nodoc:
       end
 
       def credit(money, authorization, options = {})
-        deprecated CREDIT_DEPRECATION_MESSAGE
+        ActiveMerchant.deprecated CREDIT_DEPRECATION_MESSAGE
         refund(money, authorization, options)
       end
 
@@ -93,8 +93,7 @@ module ActiveMerchant #:nodoc:
 
         xml.tag! 'AMOUNT', amount(money)
         add_credit_card(xml, creditcard)
-        add_params_in_required_order(xml, action, options)
-        add_address(xml, creditcard, options)
+        add_params_in_required_order(xml, action, creditcard, options)
         add_more_required_params(xml, options)
 
         xml.target!
@@ -110,7 +109,7 @@ module ActiveMerchant #:nodoc:
           xml.tag! 'CARDNUMBER', last_four
         end
 
-        add_params_in_required_order(xml, action, options)
+        add_params_in_required_order(xml, action, nil, options)
         xml.tag! 'REF_TRANSID', transaction_id
         add_more_required_params(xml, options)
 
@@ -125,13 +124,6 @@ module ActiveMerchant #:nodoc:
         end
       end
 
-      def expdate(creditcard)
-        year  = sprintf("%.4i", creditcard.year)
-        month = sprintf("%.2i", creditcard.month)
-
-        "#{month}#{year[-2..-1]}"
-      end
-
       def add_customer_data(xml, options)
         if options.has_key? :customer
           xml.tag! 'CUSTOMERID', options[:customer]
@@ -143,6 +135,7 @@ module ActiveMerchant #:nodoc:
       end
 
       def add_address(xml, creditcard, options)
+        return unless creditcard
 
         if address = options[:billing_address] || options[:address]
           xml.tag!("CUSTOMER_BILL") do
@@ -168,8 +161,16 @@ module ActiveMerchant #:nodoc:
             xml.tag! 'CITY', address[:city].to_s
             xml.tag! 'COMPANY', address[:company].to_s
             xml.tag! 'COUNTRY', address[:country].to_s
-            xml.tag! 'FIRSTNAME', address[:first_name].to_s
-            xml.tag! 'LASTNAME', address[:last_name].to_s
+
+            if address[:name]
+              first_name, last_name = split_names(address[:name])
+              xml.tag! 'FIRSTNAME', first_name
+              xml.tag! 'LASTNAME', last_name
+            else
+              xml.tag! 'FIRSTNAME', address[:first_name].to_s
+              xml.tag! 'LASTNAME', address[:last_name].to_s
+            end
+
             xml.tag! 'STATE', address[:state].blank?  ? 'n/a' : address[:state]
             xml.tag! 'ZIP', address[:zip].to_s
           end
@@ -189,9 +190,10 @@ module ActiveMerchant #:nodoc:
       end
 
       # SecureNet requires some of the xml params to be in a certain order.  http://cl.ly/image/3K260E0p0a0n/content.png
-      def add_params_in_required_order(xml, action, options)
+      def add_params_in_required_order(xml, action, creditcard, options)
         xml.tag! 'CODE', TRANSACTIONS[action]
         add_customer_data(xml, options)
+        add_address(xml, creditcard, options)
         xml.tag! 'DCI', 0 # No duplicate checking will be done, except for ORDERID
         xml.tag! 'INSTALLMENT_SEQUENCENUM', 1
         xml.tag! 'INVOICEDESC', options[:invoice_description] if options[:invoice_description]
@@ -199,15 +201,17 @@ module ActiveMerchant #:nodoc:
         add_merchant_key(xml, options)
         xml.tag! 'METHOD', 'CC'
         xml.tag! 'NOTE', options[:description] if options[:description]
-        xml.tag! 'ORDERID', options[:order_id]
+        xml.tag! 'ORDERID', truncate(options[:order_id], 25)
         xml.tag! 'OVERRIDE_FROM', 0 # Docs say not required, but doesn't work without it
       end
 
       def add_more_required_params(xml, options)
+        test_mode = options[:test_mode].nil? ? test? : options[:test_mode]
         xml.tag! 'RETAIL_LANENUM', '0'
-        xml.tag! 'TEST', 'TRUE' if test?
+        xml.tag! 'TEST', test_mode ? 'TRUE' : 'FALSE'
         xml.tag! 'TOTAL_INSTALLMENTCOUNT', 0
         xml.tag! 'TRANSACTION_SERVICE', 0
+        xml.tag! 'DEVELOPERID', options[:developer_id] if options[:developer_id]
       end
 
       def success?(response)
@@ -215,11 +219,6 @@ module ActiveMerchant #:nodoc:
       end
 
       def message_from(response)
-        if response[:response_code].to_i == DECLINED
-          return CVVResult.messages[ response[:card_code_response_code] ] if CARD_CODE_ERRORS.include?(response[:card_code_response_code])
-          return AVSResult.messages[ response[:avs_result_code] ] if AVS_ERRORS.include?(response[:avs_result_code])
-        end
-
         return response[:response_reason_text].nil? ? '' : response[:response_reason_text][0..-1]
       end
 

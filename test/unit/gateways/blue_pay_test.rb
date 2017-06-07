@@ -8,7 +8,6 @@ RSP = {
   :approved_purchase => "AUTH_CODE=GYRUY&PAYMENT_ACCOUNT_MASK=xxxxxxxxxxxx4242&CARD_TYPE=VISA&TRANS_TYPE=SALE&REBID=&STATUS=1&AVS=_&TRANS_ID=100134203767&CVV2=_&MESSAGE=Approved%20Sale"
 }
 
-
 class BluePayTest < Test::Unit::TestCase
   include CommStub
 
@@ -134,7 +133,7 @@ class BluePayTest < Test::Unit::TestCase
 
   def test_deprecated_credit
     @gateway.expects(:ssl_post).returns(successful_purchase_response)
-    assert_deprecation_warning("credit should only be used to credit a payment method", @gateway) do
+    assert_deprecation_warning("credit should only be used to credit a payment method") do
       assert response = @gateway.credit(@amount, '123456789', :card_number => @credit_card.number)
       assert_success response
       assert_equal 'This transaction has been approved', response.message
@@ -142,7 +141,7 @@ class BluePayTest < Test::Unit::TestCase
   end
 
   def test_supported_countries
-    assert_equal ['US'], BluePayGateway.supported_countries
+    assert_equal ['US', 'CA'], BluePayGateway.supported_countries
   end
 
   def test_supported_card_types
@@ -182,7 +181,7 @@ class BluePayTest < Test::Unit::TestCase
     def get_msg(query)
       @gateway.send(:parse, query).message
     end
-    assert_equal "No Match", get_msg('STATUS=2&CVV2=N&AVS=A&MESSAGE=FAILURE')
+    assert_equal "CVV does not match", get_msg('STATUS=2&CVV2=N&AVS=A&MESSAGE=FAILURE')
     assert_equal "Street address matches, but 5-digit and 9-digit postal code do not match.",
                    get_msg('STATUS=2&CVV2=M&AVS=A&MESSAGE=FAILURE')
   end
@@ -191,13 +190,15 @@ class BluePayTest < Test::Unit::TestCase
   def test_successful_recurring
     @gateway.expects(:ssl_post).returns(successful_recurring_response)
 
-    response = @gateway.recurring(@amount, @credit_card,
-      :billing_address => address.merge(:first_name => 'Jim', :last_name => 'Smith'),
-      :rebill_start_date => '1 MONTH',
-      :rebill_expression => '14 DAYS',
-      :rebill_cycles     => '24',
-      :rebill_amount     => @amount * 4
-   )
+    response = assert_deprecation_warning(Gateway::RECURRING_DEPRECATION_MESSAGE) do
+      @gateway.recurring(@amount, @credit_card,
+        :billing_address => address.merge(:first_name => 'Jim', :last_name => 'Smith'),
+        :rebill_start_date => '1 MONTH',
+        :rebill_expression => '14 DAYS',
+        :rebill_cycles     => '24',
+        :rebill_amount     => @amount * 4
+     )
+    end
 
     assert_instance_of Response, response
     assert response.success?
@@ -208,7 +209,9 @@ class BluePayTest < Test::Unit::TestCase
   def test_successful_update_recurring
     @gateway.expects(:ssl_post).returns(successful_update_recurring_response)
 
-    response = @gateway.update_recurring(:rebill_id => @rebill_id, :rebill_amount => @amount * 2)
+    response = assert_deprecation_warning(Gateway::RECURRING_DEPRECATION_MESSAGE) do
+      @gateway.update_recurring(:rebill_id => @rebill_id, :rebill_amount => @amount * 2)
+    end
 
     assert_instance_of Response, response
     assert response.success?
@@ -219,7 +222,9 @@ class BluePayTest < Test::Unit::TestCase
   def test_successful_cancel_recurring
     @gateway.expects(:ssl_post).returns(successful_cancel_recurring_response)
 
-    response = @gateway.cancel_recurring(@rebill_id)
+    response = assert_deprecation_warning(Gateway::RECURRING_DEPRECATION_MESSAGE) do
+      @gateway.cancel_recurring(@rebill_id)
+    end
 
     assert_instance_of Response, response
     assert response.success?
@@ -230,7 +235,9 @@ class BluePayTest < Test::Unit::TestCase
   def test_successful_status_recurring
     @gateway.expects(:ssl_post).returns(successful_status_recurring_response)
 
-    response = @gateway.status_recurring(@rebill_id)
+    response = assert_deprecation_warning(Gateway::RECURRING_DEPRECATION_MESSAGE) do
+      @gateway.status_recurring(@rebill_id)
+    end
     assert_instance_of Response, response
     assert response.success?
     assert response.test?
@@ -243,6 +250,10 @@ class BluePayTest < Test::Unit::TestCase
     assert @gateway.send(:post_data, 'AUTH_ONLY').include?("solution_ID=A1000000")
   ensure
     ActiveMerchant::Billing::BluePayGateway.application_id = nil
+  end
+
+  def test_transcript_scrubbing
+    assert_equal scrubbed_transcript, @gateway.scrub(transcript)
   end
 
   private
@@ -285,5 +296,13 @@ class BluePayTest < Test::Unit::TestCase
 
   def successful_status_recurring_response
     'last_date=2012-04-13%2009%3A49%3A27&usual_date=2012-04-13%2000%3A00%3A00&template_id=100096219668&status=active&account_id=100096218902&rebill_id=100096219669&reb_amount=2.00&creation_date=2012-04-13%2009%3A49%3A19&sched_expr=1%20DAY&next_date=2012-04-13%2000%3A00%3A00&next_amount=&user_id=100096218903&cycles_remain=4'
+  end
+
+  def transcript
+    "card_num=4111111111111111&exp_date=1212&MASTER_ID=&PAYMENT_TYPE=CREDIT&PAYMENT_ACCOUNT=4242424242424242&CARD_CVV2=123&CARD_EXPIRE=0916&NAME1=Longbob&NAME2=Longsen&ORDER_ID=78c40687dd55dbdc140df777b0e8ece3&INVOICE_ID=&invoice_num=78c40687dd55dbdc140df777b0e8ece3&EMAIL=&CUSTOM_ID=&DUPLICATE_OVERRIDE=&TRANS_TYPE=SALE&AMOUNT=1.00&MODE=TEST&ACCOUNT_ID=100096218902&TAMPER_PROOF_SEAL=55624458ce3e15fa8e33e6f2d784bbcb"
+  end
+
+  def scrubbed_transcript
+    "card_num=[FILTERED]&exp_date=1212&MASTER_ID=&PAYMENT_TYPE=CREDIT&PAYMENT_ACCOUNT=[FILTERED]&CARD_CVV2=[FILTERED]&CARD_EXPIRE=0916&NAME1=Longbob&NAME2=Longsen&ORDER_ID=78c40687dd55dbdc140df777b0e8ece3&INVOICE_ID=&invoice_num=78c40687dd55dbdc140df777b0e8ece3&EMAIL=&CUSTOM_ID=&DUPLICATE_OVERRIDE=&TRANS_TYPE=SALE&AMOUNT=1.00&MODE=TEST&ACCOUNT_ID=100096218902&TAMPER_PROOF_SEAL=[FILTERED]"
   end
 end

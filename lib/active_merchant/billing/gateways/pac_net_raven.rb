@@ -25,15 +25,15 @@ module ActiveMerchant #:nodoc:
         'cvv2_not_checked' => 'X'
       }
 
-      self.test_url = 'https://demo.deepcovelabs.com/realtime/'
-      self.live_url = 'https://raven.pacnetservices.com/realtime/'
+      self.live_url = 'https://raven.deepcovelabs.net/realtime/'
+      self.test_url = self.live_url
 
       self.supported_countries = ['US']
       self.supported_cardtypes = [:visa, :master]
       self.money_format = :cents
       self.default_currency = 'USD'
-      self.homepage_url = 'http://www.pacnetservices.com/'
-      self.display_name = 'Raven PacNet'
+      self.homepage_url = 'https://www.deepcovelabs.com/raven'
+      self.display_name = 'Raven'
 
       def initialize(options = {})
         requires!(options, :user, :secret, :prn)
@@ -63,7 +63,7 @@ module ActiveMerchant #:nodoc:
       def void(authorization, options = {})
         post = {}
         post['TrackingNumber'] = authorization
-        post['PymtType'] = options[:pymt_type] || 'cc_debit'
+        post['PymtType'] = options[:pymt_type]
 
         commit('void', nil, post)
       end
@@ -107,7 +107,7 @@ module ActiveMerchant #:nodoc:
       end
 
       def parse(body)
-        Hash[body.split('&').map{|x| x.split('=').map{|x| CGI.unescape(x)}}]
+        Hash[body.split('&').map{|x| x.split('=').map{|y| CGI.unescape(y)}}]
       end
 
       def commit(action, money, parameters)
@@ -199,14 +199,7 @@ module ActiveMerchant #:nodoc:
         else
           post['UserName']
         end
-        Digest::HMAC.hexdigest(string, @options[:secret], Digest::SHA1)
-      end
-
-      def expdate(creditcard)
-        year  = sprintf("%.4i", creditcard.year)
-        month = sprintf("%.2i", creditcard.month)
-
-        "#{month}#{year[-2..-1]}"
+        OpenSSL::HMAC.hexdigest(OpenSSL::Digest::SHA1.new(@options[:secret]), @options[:secret], string)
       end
     end
   end
